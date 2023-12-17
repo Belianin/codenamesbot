@@ -62,35 +62,25 @@ public class GameUpdateHandler : IUpdateHandler
             var sivlerMedals = new Dictionary<long, int>();
             var bronzeMedals = new Dictionary<long, int>();
 
-            var users = games.SelectMany(x => x.Answers.Select(x => x.User)).DistinctBy(x => x.Id).ToDictionary(x => x.Id, x => x);
-
             foreach (var game in games)
             {
-                var participants = game.Answers.ToLookup(x => x.Word);
+                var winners = GameManager.GetWinners(game);
 
-                var winners = game.Votes
-                    .GroupBy(x => x.Word)
-                    .Select(x => new { Count = x.Count(), Word = x.Key })
-                    .OrderByDescending(x => x.Count)
-                    .ThenBy(x => participants[x.Word].Min(x => x.CreationDate))
-                    .Take(3)
-                    .ToArray();
-
-                foreach (var (winner, place) in winners.Select((x, i) => (x, i + 1)))
+                foreach (var winner in winners)
                 {
-                    var dict = place switch
+                    var dict = winner.Place switch
                     {
                         1 => goldMedals,
                         2 => sivlerMedals,
                         3 => bronzeMedals
                     };
 
-                    foreach (var participan in participants[winner.Word])
+                    foreach (var participan in winner.Answers.Values.SelectMany(x => x))
                     {
-                        if (!dict.ContainsKey(participan.User.Id))
-                            dict[participan.User.Id] = 1;
+                        if (!dict.ContainsKey(participan.Id))
+                            dict[participan.Id] = 1;
                         else
-                            dict[participan.User.Id]++;
+                            dict[participan.Id]++;
                     }
                 }
             }

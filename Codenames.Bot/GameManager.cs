@@ -196,48 +196,36 @@ namespace Codenames.Bot
 
         public string GetResultString(Game game)
         {
-            var participants = dbContext.Answers
-                .Where(x => x.Game.Id == Game.Id)
-                .Include(x => x.User)
-                .AsNoTracking()
-                .ToLookup(x => x.Word);
+            var winners = GetWinners(game);
 
-            var winners = game.Votes
-                .GroupBy(x => x.Word)
-                .Select(x => new { Count = x.Count(), Word = x.Key })
-                .GroupBy(x => x.Count)
-                .Select(x => new { Count = x.Key, Words = x.Select(x => x.Word).ToArray() })
-                .OrderByDescending(x => x.Count)
-                .ToArray();
-
-            if (winners.Length == 0)
+            if (winners.Count == 0)
                 return "Никто не проголосовал...";
 
             var result = new StringBuilder();
-            foreach (var (vote, index) in winners.Select((x, i) => (x, i)))
-            {    
-                var emoji = index switch
+            foreach (var winner in winners)
+            {
+                var emoji = winner.Place switch
                 {
-                    0 => " 🥇",
-                    1 => " 🥈",
-                    2 => " 🥉",
+                    1 => " 🥇",
+                    2 => " 🥈",
+                    3 => " 🥉",
                     _ => ""
                 };
 
-                foreach (var word in vote.Words)
+                foreach (var (word, authors) in winner.Answers)
                 {
-                    var authors = string.Join(", ", participants[word].Select(x => $"@{x.User.Name}"));
+                    var authorsString = string.Join(", ", authors.Select(x => $"@{x.Name}"));
 
-                    var voteCountString = vote.Count > 10 && vote.Count < 15 ? "голосов" : (vote.Count % 10) switch
+                    var voteCountString = winner.Votes > 10 && winner.Votes < 15 ? "голосов" : (winner.Votes % 10) switch
                     {
                         1 => "голос",
                         2 or 3 or 4 => "голоса",
                         _ => "голосов"
                     };
 
-                    var author = participants[word].Count() > 1 ? "Авторы" : "Автор";
+                    var author = authors.Count > 1 ? "Авторы" : "Автор";
 
-                    var line = $"{index + 1}.{emoji} <b>{word}</b> — {vote.Count} {voteCountString}. {author}: {authors}";
+                    var line = $"{winner.Place}.{emoji} <b>{word}</b> — {winner.Votes} {voteCountString}. {author}: {authorsString}";
                     result.AppendLine(line);
                 }
             }

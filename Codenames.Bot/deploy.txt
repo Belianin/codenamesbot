@@ -1,0 +1,31 @@
+scp net6.0.zip root@:/usr/bot
+unzip net6.0.zip
+delete zip
+run &
+
+
+nohup dotnet Codenames.Bot.dll > log 2> err < /dev/null &
+
+scp root@:/usr/bot/net6.0/codenames.db codenames.db
+
+
+
+SELECT Name, 
+	(SELECT DISTINCT Count(GameId) FROM Answers WHERE Answers.UserId = Users.Id ) as GameAnswered,
+	(SELECT DISTINCT Count(GameId) FROM Votes WHERE Votes.UserId = Users.Id ) as GameVoted
+FROM Users
+ORDER BY GameAnswered DESC, GameVoted DESC
+
+
+SELECT Name, 
+	(SELECT DISTINCT Count(GameId) FROM Votes WHERE Votes.UserId = Users.Id ) as GameVoted,
+	(SELECT DISTINCT Count(v.GameId) FROM Votes v JOIN Answers a ON v.GameId = a.GameId AND v.Word = a.Word WHERE v.UserId = Users.Id AND a.UserId = Users.Id ) as SelfVote, -- не точно
+	round(((SELECT DISTINCT Count(v.GameId) FROM Votes v JOIN Answers a ON v.GameId = a.GameId AND v.Word = a.Word WHERE v.UserId = Users.Id AND a.UserId = Users.Id) * 1.0 / (SELECT DISTINCT Count(GameId) FROM Votes WHERE Votes.UserId = Users.Id)) * 100) as SelfVotePercent
+FROM Users
+ORDER BY SelfVote DESC, SelfVotePercent DESC
+
+
+SELECT Name, 
+	(SELECT DISTINCT Count(GameId) FROM Votes WHERE Votes.UserId = Users.Id ) + (SELECT DISTINCT Count(GameId) FROM Votes WHERE Votes.UserId = Users.Id ) - (3 * (SELECT DISTINCT Count(v.GameId) FROM Votes v JOIN Answers a ON v.GameId = a.GameId AND v.Word = a.Word WHERE v.UserId = Users.Id AND a.UserId = Users.Id )) as Activity
+FROM Users
+ORDER BY Activity DESC
