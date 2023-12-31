@@ -141,8 +141,8 @@ namespace Codenames.Bot
         {
             var trimmed = text.Trim().ToLower();
 
-            var answersCount = dbContext.Answers.Where(x => x.Game.Id == Game.Id && x.Word == trimmed).Count();
-            if (answersCount == 0)
+            var answers = dbContext.Answers.Where(x => x.Game.Id == Game.Id && x.Word == trimmed).ToArray();
+            if (answers.Length == 0 || (answers.Length == 1 && answers.Single().User.Id == userId))
                 return false;
 
             var user = dbContext.Users.Find(userId);
@@ -235,7 +235,15 @@ namespace Codenames.Bot
 
         private async Task StartGameAsync()
         {
-            var game = await gameFactory.CreateGameAsync();
+            var excludedWords = dbContext.Games
+                .OrderByDescending(x => x.FinishedAt)
+                .Take(GameFactorySettings.UniqueRiddleGames)
+                .SelectMany(x => x.Words)
+                .Select(x => x.Value)
+                .Distinct()
+                .ToHashSet();
+
+            var game = await gameFactory.CreateGameAsync(excludedWords);
             lock (gameLock)
             {
                 Game = game;

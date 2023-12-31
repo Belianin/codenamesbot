@@ -17,14 +17,14 @@
 
             try
             {
-                //while (!cancellationToken.IsCancellationRequested)
-                //{
-                //    foreach (var e in events)
-                //    {
-                //        await e.RunAsync();
-                //        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
-                //    }
-                //}
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    foreach (var e in events)
+                    {
+                        await e.RunAsync();
+                        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+                    }
+                }
 
                 while (!cancellationToken.IsCancellationRequested)
                 {

@@ -13,19 +13,36 @@ namespace Codenames
             this.wordsProvider = wordsProvider;
         }
 
-        public async Task<Game> CreateGameAsync()
+        public async Task<Game> CreateGameAsync(IReadOnlySet<string> exlcude)
         {
             var allWords = await wordsProvider.GetWordsAsync();
             var random = new Random();
             
-            var words = random
-                .Pick(allWords, settings.TotalWords)
-                .Select(x => new Word() { Value = x})
-                .ToArray();
-            foreach (var riddle in random.Pick(words, settings.RiddleWords))
-                riddle.IsRiddle = true;
+            while (true)
+            {
+                var riddles = random
+                    .Pick(allWords.Where(x => !exlcude.Contains(x)).ToList(), settings.RiddleWords)
+                    .ToHashSet();
+                var words = random
+                    .Pick(allWords.Where(x => !riddles.Contains(x)).ToList(), settings.TotalWords - settings.RiddleWords)
+                    .Select(x => new Word() { Value = x })
+                    .ToArray();
 
-            return new Game { Words = words};
+                var result = riddles
+                    .Select(x => new Word
+                    {
+                        Value = x,
+                        IsRiddle = true,
+                    })
+                    .Concat(words)
+                    .OrderBy(x => random.Next())
+                    .ToArray();
+
+                return new Game
+                {
+                    Words = result
+                };
+            }
         }
     }
 }

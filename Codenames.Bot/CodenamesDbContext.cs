@@ -21,6 +21,13 @@ namespace Codenames.Bot
             Database.EnsureCreated();
         }
 
+        public CodenamesDbContext()
+        {
+        }
+
+        protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+            => optionsBuilder.UseSqlite("Data Source=codenames.db");
+
         protected override void OnModelCreating(ModelBuilder builder)
         {
             builder.Entity<User>()

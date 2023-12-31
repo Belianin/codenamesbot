@@ -5,7 +5,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics.Metrics;
 using System.Linq;
+using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Telegram.Bot;
 using Telegram.Bot.Polling;
@@ -45,6 +47,15 @@ public class GameUpdateHandler : IUpdateHandler
         gameManager.RunAsync(CancellationToken.None).Wait();
     }
 
+    class UserStatistics
+    {
+        public Codenames.User User { get; set; }
+        public int Gold { get; set; }
+        public int Silver { get; set; }
+        public int Bronze { get; set; }
+        public int TotalVotes { get; set; }
+    }
+
     private async Task HandleDayEndAsync(CodenamesDbContext context)
     {
         try
@@ -58,9 +69,7 @@ public class GameUpdateHandler : IUpdateHandler
                 .Include(x => x.Votes)
                 .ToArray();
 
-            var goldMedals = new Dictionary<long, int>();
-            var sivlerMedals = new Dictionary<long, int>();
-            var bronzeMedals = new Dictionary<long, int>();
+            var statistics = new Dictionary<long, UserStatistics>();
 
             foreach (var game in games)
             {
@@ -68,19 +77,28 @@ public class GameUpdateHandler : IUpdateHandler
 
                 foreach (var winner in winners)
                 {
-                    var dict = winner.Place switch
+                    foreach (var participant in winner.Answers.Values.SelectMany(x => x))
                     {
-                        1 => goldMedals,
-                        2 => sivlerMedals,
-                        3 => bronzeMedals
-                    };
+                        if (!statistics.ContainsKey(participant.Id))
+                            statistics[participant.Id] = new UserStatistics
+                            {
+                                User = participant
+                            };
 
-                    foreach (var participan in winner.Answers.Values.SelectMany(x => x))
-                    {
-                        if (!dict.ContainsKey(participan.Id))
-                            dict[participan.Id] = 1;
-                        else
-                            dict[participan.Id]++;
+                        switch (winner.Place)
+                        {
+                            case 1:
+                                statistics[participant.Id].Gold++;
+                                break;
+                            case 2:
+                                statistics[participant.Id].Silver++;
+                                break;
+                            case 3:
+                                statistics[participant.Id].Bronze++;
+                                break;
+                        }
+
+                        statistics[participant.Id].TotalVotes += winner.Votes;
                     }
                 }
             }
@@ -97,28 +115,46 @@ public class GameUpdateHandler : IUpdateHandler
                 return stringBuilder.ToString();
             }
 
-            var allWinnerIds = goldMedals.Keys.Concat(sivlerMedals.Keys).Concat(bronzeMedals.Keys)
-                .Distinct()
-                .Select(x => new { Id = x, Gold = goldMedals.GetValueOrDefault(x), Silver = sivlerMedals.GetValueOrDefault(x), Bronze = bronzeMedals.GetValueOrDefault(x) })
+            var winnerStrings = statistics.Values
                 .OrderByDescending(x => x.Gold * 3 + x.Silver * 2 + x.Bronze)
+                .ThenByDescending(x => x.Gold)
+                .ThenByDescending(x => x.Silver)
+                .ThenByDescending(x => x.Bronze)
+                .ThenByDescending(x => x.TotalVotes)
                 .Select((x, i) =>
                 {
-                    return $"{i + 1}. @{users[x.Id].Name} — {Repeat("🥇", x.Gold)}{Repeat("🥈", x.Silver)}{Repeat("🥉", x.Bronze)}";
+                    var voteCountString = x.TotalVotes > 10 && x.TotalVotes < 15 ? "голосов" : (x.TotalVotes % 10) switch
+                    {
+                        1 => "голос",
+                        2 or 3 or 4 => "голоса",
+                        _ => "голосов"
+                    };
+
+                    return $"{i + 1}. @{x.User.Name} — {Repeat("🥇", x.Gold)}{Repeat("🥈", x.Silver)}{Repeat("🥉", x.Bronze)}. {x.TotalVotes} {voteCountString}";
                 });
 
-            var message = $"Статистика за {DateTime.Today:D}:\n\n{string.Join("\n", allWinnerIds)}";
+            var message = $"Статистика за {DateTime.Today:D}:\n\n{string.Join("\n", winnerStrings)}";
 
             await SendAllAsync(message);
         }
         catch (Exception ex)
         {
             Console.WriteLine(ex.Message);
-            await botClient.SendTextMessageAsync(
-                chatId: 347495801,
-                text: $"<pre>{ex.Message}</pre>",
-                parseMode: ParseMode.Html);
+            try
+            {
+                await botClient.SendTextMessageAsync(
+                    chatId: 347495801,
+                    text: $"<pre>{ex.Message}</pre>",
+                    parseMode: ParseMode.Html);
+            }
+            catch
+            {
+
+            }
         }
     }
+
+    private Regex commandRegex = new Regex(@"^(/\w+?)(\s|$)");
 
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
     {
@@ -133,15 +169,16 @@ public class GameUpdateHandler : IUpdateHandler
 
             if (update.Message is not { } message)
                 return;
-            if (message.Text is not { } messageText)
+            if (message.Text is not { } messageText || message.Caption is not { } caption)
                 return;
-            messageText = messageText.Trim();
+            messageText = messageText?.Trim() ?? caption.Trim();
 
             Console.WriteLine($"Received '{message.Text}' from '{message.From.Id}'");
 
             var chatId = message.Chat.Id;
 
-            if (commands.TryGetValue(messageText, out var command))
+            var regexMatch = commandRegex.Match(messageText);
+            if (regexMatch.Success && commands.TryGetValue(regexMatch.Groups[1].Value, out var command))
             {
                 await command.HandleAsync(message, this);
                 return;
@@ -222,22 +259,29 @@ public class GameUpdateHandler : IUpdateHandler
 
     private async Task HandleVoteAsync(long chatId, string vote, CancellationToken cancellationToken)
     {
-        var voted = gameManager.Vote(chatId, vote);
-        if (voted)
+        try
         {
-            await botClient.SendTextMessageAsync(
-                chatId: chatId,
-                text: $"Вы проголосовали за <b>{vote}</b>",
-                parseMode: ParseMode.Html,
-                cancellationToken: cancellationToken);
+            var voted = gameManager.Vote(chatId, vote);
+            if (voted)
+            {
+                await botClient.SendTextMessageAsync(
+                    chatId: chatId,
+                    text: $"Вы проголосовали за <b>{vote}</b>",
+                    parseMode: ParseMode.Html,
+                    cancellationToken: cancellationToken);
+            }
+            else
+            {
+                await botClient.SendTextMessageAsync(
+                    chatId: chatId,
+                    text: "Такой загадки нет!",
+                    parseMode: ParseMode.Html,
+                    cancellationToken: cancellationToken);
+            }
         }
-        else
+        catch
         {
-            await botClient.SendTextMessageAsync(
-                chatId: chatId,
-                text: "Такой загадки нет!",
-                parseMode: ParseMode.Html,
-                cancellationToken: cancellationToken);
+
         }
     }
 
@@ -247,11 +291,18 @@ public class GameUpdateHandler : IUpdateHandler
         var text = GameRenderer.GetWordsMessage(game);
         foreach (var id in ids)
         {
-            var sent = await botClient.SendTextMessageAsync(
-                chatId: id,
-                text: text,
-                parseMode: ParseMode.Html);
-            mainMessageIds[id] = sent.MessageId;
+            try
+            {
+                var sent = await botClient.SendTextMessageAsync(
+                    chatId: id,
+                    text: text,
+                    parseMode: ParseMode.Html);
+                mainMessageIds[id] = sent.MessageId;
+            }
+            catch
+            {
+
+            }
         }
     }
 
@@ -259,19 +310,17 @@ public class GameUpdateHandler : IUpdateHandler
     {
         Console.WriteLine("Voting started");
 
-        var uniqueWords = game.Answers?.Select(x => x.Word.ToLower()).Distinct().ToArray() ?? Array.Empty<string>();
-
-        if (uniqueWords.Length == 0)
+        foreach (var id in UsersRepostiory.GetAllIds())
         {
-            await SendAllAsync("Никто не прислал ни один вариант...");
-        }
-        else
-        {
-            var (text, markup) = GameRenderer.GetVotingMessage(game);
+            try
+            {
+                var (text, markup) = GameRenderer.GetVotingMessage(game, id);
+                await botClient.SendTextMessageAsync(id, text, replyMarkup: markup, parseMode: ParseMode.Html);
+            }
+            catch
+            {
 
-            var words = string.Join("\n", game.Words.Select(x => x.IsRiddle ? $"<b>✅ {x.Value}</b>" : x.Value));
-            var riddles = string.Join("\n", uniqueWords);
-            await SendAllAsync(text, replyMarkup: markup);
+            }
         }
     }
     private async Task HandleGameEndedAsync(Codenames.Game game)
@@ -301,17 +350,37 @@ public class GameUpdateHandler : IUpdateHandler
         }
     }
     
-    internal async Task SendAllAsync(string text, IReplyMarkup? replyMarkup = null)
+    internal async Task SendAllAsync(string text, IReplyMarkup? replyMarkup = null, ParseMode parseMode = ParseMode.Html, InputFile? photo = null)
     {
         var ids = UsersRepostiory.GetAllIds();
 
         foreach (var id in ids)
         {
-            await botClient.SendTextMessageAsync(
-                chatId: id,
-                text: text,
-                parseMode: ParseMode.Html,
-                replyMarkup: replyMarkup);
+            try
+            {
+                if (photo == null)
+                {
+                    await botClient.SendTextMessageAsync(
+                        chatId: id,
+                        text: text,
+                        parseMode: parseMode,
+                        replyMarkup: replyMarkup);
+
+                }
+                else
+                {
+                    await botClient.SendPhotoAsync(
+                        chatId: id,
+                        photo: photo,
+                        caption: text,
+                        parseMode: parseMode,
+                        replyMarkup: replyMarkup);
+                }
+            }
+            catch
+            {
+
+            }
         }
     }
 

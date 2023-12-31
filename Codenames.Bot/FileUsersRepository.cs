@@ -4,15 +4,10 @@ namespace Codenames.Bot
 {
     public class SqlUsersRepository : IUsersRepostiory
     {
-        private readonly CodenamesDbContext dbContext;
-
-        public SqlUsersRepository(CodenamesDbContext dbContext)
-        {
-            this.dbContext = dbContext;
-        }
-
         public void Add(long id, string displayName)
         {
+            using var dbContext = new CodenamesDbContext();
+
             var currentUser = dbContext.Users.Find(id);
             if (currentUser != null)
             {
@@ -37,6 +32,8 @@ namespace Codenames.Bot
 
         public void Delete(long id)
         {
+            using var dbContext = new CodenamesDbContext();
+
             var currentUser = dbContext.Users.Find(id);
             if (currentUser == null)
                 return;
@@ -47,11 +44,15 @@ namespace Codenames.Bot
 
         public ICollection<long> GetAllIds()
         {
+            using var dbContext = new CodenamesDbContext();
+
             return dbContext.Users.Where(x => !x.IsDisabled).Select(x => x.Id).ToArray();
         }
 
         public bool Has(long id)
         {
+            using var dbContext = new CodenamesDbContext();
+
             var user = dbContext.Users.Find(id);
             return user != null && !user.IsDisabled;
         }
