@@ -1,30 +1,26 @@
 ﻿namespace Codenames.Bot
 {
-    internal class Scheduler
+    public interface IGameScheduler
     {
-        private readonly ScheduledEvent[] events;
+        public Task RunAsync(ICollection<ScheduledEvent> events, CancellationToken cancellationToken);
+    }
 
-        public Scheduler(IEnumerable<ScheduledEvent> events)
-        {
-            this.events = events
-                .OrderBy(x => x.Time)
-                .ToArray();
-        }
-
-        public async Task RunAsync(CancellationToken cancellationToken)
+    internal class Scheduler : IGameScheduler
+    {
+        public async Task RunAsync(ICollection<ScheduledEvent> events, CancellationToken cancellationToken)
         {
             TimeSpan now;
 
             try
             {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    foreach (var e in events)
-                    {
-                        await e.RunAsync();
-                        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
-                    }
-                }
+                //while (!cancellationToken.IsCancellationRequested)
+                //{//
+                //    foreach (var e in events)
+                //    {
+                //        await e.RunAsync();
+                //        await Task.Delay(TimeSpan.FromSeconds(15), cancellationToken);
+                //    }
+                // }
 
                 while (!cancellationToken.IsCancellationRequested)
                 {

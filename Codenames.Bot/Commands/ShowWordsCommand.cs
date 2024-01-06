@@ -20,7 +20,7 @@ public class ShowWordsCommand : ICommand
         }
         else if (handler.gameManager.Game.State == GameState.Voting)
         {
-            var answer = GameRenderer.GetVotingMessage(handler.gameManager.Game, message.Chat.Id);
+            var answer = GameRenderer.RenderVoteStarted(handler.gameManager.Game, message.Chat.Id);
             await handler.botClient.SendTextMessageAsync(
                 chatId: message.Chat.Id,
                 text: answer.Item1,

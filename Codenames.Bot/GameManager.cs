@@ -17,13 +17,15 @@ namespace Codenames.Bot
         private readonly GameSettings settings;
         private readonly CodenamesDbContext dbContext;
         private readonly GameFactory gameFactory;
+        private readonly IGameScheduler gameScheduler;
 
         private object gameLock = new();
 
-        public GameManager(GameFactory gameFactory, CodenamesDbContext dbContext)
+        public GameManager(GameFactory gameFactory, CodenamesDbContext dbContext, IGameScheduler gameScheduler)
         {
             this.gameFactory = gameFactory;
             this.dbContext = dbContext;
+            this.gameScheduler = gameScheduler;
         }
 
         public event EventHandler<Game> OnGameChanged;
@@ -32,63 +34,65 @@ namespace Codenames.Bot
 
         public Task RunAsync(CancellationToken cancellationToken)
         {
-            return new Scheduler(new[]
+            ScheduledEvent StartGame(double hours)
+            {
+                return new ScheduledEvent
                 {
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(9),
+                    Name = "StartGame",
+                    Time = TimeSpan.FromHours(hours),
                     RunAsync = StartGameAsync
-                },
-                new ScheduledEvent
+                };
+            }
+
+            ScheduledEvent StartVote(double hours)
+            {
+                return new ScheduledEvent
                 {
-                    Time = TimeSpan.FromHours(12),
+                    Name = "StartVote",
+                    Time = TimeSpan.FromHours(hours),
                     RunAsync = StartVoteAsync
-                },
-                new ScheduledEvent
+                };
+            }
+
+            ScheduledEvent EndGame(double hours)
+            {
+                return new ScheduledEvent
                 {
-                    Time = TimeSpan.FromHours(12.5),
+                    Name = "EndGame",
+                    Time = TimeSpan.FromHours(hours),
                     RunAsync = EndGameAsync
-                },
-                new ScheduledEvent
+                };
+            }
+
+            ScheduledEvent ShowStatistics(double hours)
+            {
+                return new ScheduledEvent
                 {
-                    Time = TimeSpan.FromHours(13),
-                    RunAsync = StartGameAsync
-                },
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(16),
-                    RunAsync = StartVoteAsync
-                },
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(16.5),
-                    RunAsync = EndGameAsync
-                },
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(17),
-                    RunAsync = StartGameAsync
-                },
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(20),
-                    RunAsync = StartVoteAsync
-                },
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(20.5),
-                    RunAsync = EndGameAsync
-                },
-                new ScheduledEvent
-                {
-                    Time = TimeSpan.FromHours(21),
+                    Name = "ShowStatistics",
+                    Time = TimeSpan.FromHours(hours),
                     RunAsync = () =>
                     {
                         OnDayEnd?.Invoke(this, dbContext);
                         return Task.CompletedTask;
                     }
-                }
-            }).RunAsync(cancellationToken);
+                };
+            }
+
+            var lastTime = 7;
+
+            var result = new List<ScheduledEvent>();
+
+            for (var i = 0; i < 3; i++)
+            {
+                result.Add(StartGame(lastTime));
+                result.Add(StartVote(lastTime + 3));
+                result.Add(EndGame(lastTime + 3 + 1));
+                lastTime += 4;
+            }
+
+            result.Add(ShowStatistics(lastTime));
+
+            return gameScheduler.RunAsync(result, cancellationToken);
         }
 
         public RiddleResult AcceptAnswer(long userId, string text)
@@ -192,45 +196,6 @@ namespace Codenames.Bot
                     return x;
                 })
                 .ToArray();
-        }
-
-        public string GetResultString(Game game)
-        {
-            var winners = GetWinners(game);
-
-            if (winners.Count == 0)
-                return "Никто не проголосовал...";
-
-            var result = new StringBuilder();
-            foreach (var winner in winners)
-            {
-                var emoji = winner.Place switch
-                {
-                    1 => " 🥇",
-                    2 => " 🥈",
-                    3 => " 🥉",
-                    _ => ""
-                };
-
-                foreach (var (word, authors) in winner.Answers)
-                {
-                    var authorsString = string.Join(", ", authors.Select(x => $"@{x.Name}"));
-
-                    var voteCountString = winner.Votes > 10 && winner.Votes < 15 ? "голосов" : (winner.Votes % 10) switch
-                    {
-                        1 => "голос",
-                        2 or 3 or 4 => "голоса",
-                        _ => "голосов"
-                    };
-
-                    var author = authors.Count > 1 ? "Авторы" : "Автор";
-
-                    var line = $"{winner.Place}.{emoji} <b>{word}</b> — {winner.Votes} {voteCountString}. {author}: {authorsString}";
-                    result.AppendLine(line);
-                }
-            }
-
-            return result.ToString();
         }
 
         private async Task StartGameAsync()

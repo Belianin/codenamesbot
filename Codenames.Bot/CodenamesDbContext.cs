@@ -47,7 +47,7 @@ namespace Codenames.Bot
                 .Ignore(x => x.State);
 
             builder.Entity<Vote>()
-                .HasKey(new string[]{ "UserId", "GameId" });
+                .HasKey(new []{ "UserId", "GameId" });
             builder.Entity<Vote>()
                 .HasOne(x => x.User)
                 .WithMany(x => x.Votes)
@@ -58,7 +58,7 @@ namespace Codenames.Bot
                 .HasForeignKey("GameId");
 
             builder.Entity<Answer>()
-                .HasKey(new string[] { "UserId", "GameId" });
+                .HasKey(new [] { "UserId", "GameId" });
             builder.Entity<Answer>()
                 .HasOne(x => x.User)
                 .WithMany(x => x.Answers)
@@ -69,7 +69,7 @@ namespace Codenames.Bot
                 .HasForeignKey("GameId");
 
             builder.Entity<Word>()
-                .HasKey(new string[] { "GameId", "Value" });
+                .HasKey(new [] { "GameId", "Value" });
         }
     }
 }

@@ -3,6 +3,7 @@ using Codenames;
 using Codenames.Bot;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using System;
 using System.Diagnostics.Metrics;
 using System.Linq;
 using System.Reflection;
@@ -24,19 +25,21 @@ public class GameUpdateHandler : IUpdateHandler
 
     public readonly Dictionary<long, int> mainMessageIds = new();
     private readonly Dictionary<string, ICommand> commands;
+    private readonly IChannelSender channelSender;
     private readonly ILogger<GameUpdateHandler> logger;
 
     public GameUpdateHandler(
         GameManager gameManager,
         IUsersRepostiory usersRepostiory,
         IEnumerable<ICommand> commands,
-        ILogger<GameUpdateHandler> logger)
+        ILogger<GameUpdateHandler> logger,
+        IChannelSender channelSender)
     {
         this.logger = logger;
         this.gameManager = gameManager;
         this.UsersRepostiory = usersRepostiory;
         this.commands = commands.ToDictionary(x => x.Name, x => x);
-
+        this.channelSender = channelSender;
     }
 
     public void Run(TelegramBotClient botClient)
@@ -47,93 +50,15 @@ public class GameUpdateHandler : IUpdateHandler
         gameManager.RunAsync(CancellationToken.None).Wait();
     }
 
-    class UserStatistics
-    {
-        public Codenames.User User { get; set; }
-        public int Gold { get; set; }
-        public int Silver { get; set; }
-        public int Bronze { get; set; }
-        public int TotalVotes { get; set; }
-    }
-
     private async Task HandleDayEndAsync(CodenamesDbContext context)
     {
         try
         {
-            var today = DateTime.UtcNow.Date;
-            var nextDay = today.AddDays(1);
-            var games = context.Games
-                .Where(x => x.StartedAt > today && x.FinishedAt.HasValue && x.FinishedAt < nextDay)
-                .Include(x => x.Answers)
-                .ThenInclude(x => x.User)
-                .Include(x => x.Votes)
-                .ToArray();
+            var games = GetDayGames(context);
 
-            var statistics = new Dictionary<long, UserStatistics>();
+            var statistics = CountUserStatistics(games);
 
-            foreach (var game in games)
-            {
-                var winners = GameManager.GetWinners(game);
-
-                foreach (var winner in winners)
-                {
-                    foreach (var participant in winner.Answers.Values.SelectMany(x => x))
-                    {
-                        if (!statistics.ContainsKey(participant.Id))
-                            statistics[participant.Id] = new UserStatistics
-                            {
-                                User = participant
-                            };
-
-                        switch (winner.Place)
-                        {
-                            case 1:
-                                statistics[participant.Id].Gold++;
-                                break;
-                            case 2:
-                                statistics[participant.Id].Silver++;
-                                break;
-                            case 3:
-                                statistics[participant.Id].Bronze++;
-                                break;
-                        }
-
-                        statistics[participant.Id].TotalVotes += winner.Votes;
-                    }
-                }
-            }
-
-            string Repeat(string text, int count)
-            {
-                var stringBuilder = new StringBuilder();
-
-                for (var i = 0; i < count; i++)
-                {
-                    stringBuilder.Append(text);
-                }
-
-                return stringBuilder.ToString();
-            }
-
-            var winnerStrings = statistics.Values
-                .OrderByDescending(x => x.Gold * 3 + x.Silver * 2 + x.Bronze)
-                .ThenByDescending(x => x.Gold)
-                .ThenByDescending(x => x.Silver)
-                .ThenByDescending(x => x.Bronze)
-                .ThenByDescending(x => x.TotalVotes)
-                .Select((x, i) =>
-                {
-                    var voteCountString = x.TotalVotes > 10 && x.TotalVotes < 15 ? "голосов" : (x.TotalVotes % 10) switch
-                    {
-                        1 => "голос",
-                        2 or 3 or 4 => "голоса",
-                        _ => "голосов"
-                    };
-
-                    return $"{i + 1}. @{x.User.Name} — {Repeat("🥇", x.Gold)}{Repeat("🥈", x.Silver)}{Repeat("🥉", x.Bronze)}. {x.TotalVotes} {voteCountString}";
-                });
-
-            var message = $"Статистика за {DateTime.Today:D}:\n\n{string.Join("\n", winnerStrings)}";
+            var message = $"Статистика за {DateTime.Today:D}:\n\n{GameRenderer.RenderUsersSummary(statistics)}";
 
             await SendAllAsync(message);
         }
@@ -154,6 +79,58 @@ public class GameUpdateHandler : IUpdateHandler
         }
     }
 
+    private ICollection<Codenames.Game> GetDayGames(CodenamesDbContext context)
+    {
+        var today = DateTime.UtcNow.Date;
+        var nextDay = today.AddDays(1);
+
+        return context.Games
+            .Where(x => x.StartedAt > today && x.FinishedAt.HasValue && x.FinishedAt < nextDay)
+            .Include(x => x.Answers)
+            .ThenInclude(x => x.User)
+            .Include(x => x.Votes)
+            .ToArray();
+    }
+
+    private ICollection<UserStatistics> CountUserStatistics(IEnumerable<Codenames.Game> games)
+    {
+        var statistics = new Dictionary<long, UserStatistics>();
+
+        foreach (var game in games)
+        {
+            var winners = GameManager.GetWinners(game);
+
+            foreach (var winner in winners)
+            {
+                foreach (var participant in winner.Answers.Values.SelectMany(x => x))
+                {
+                    if (!statistics.ContainsKey(participant.Id))
+                        statistics[participant.Id] = new UserStatistics
+                        {
+                            User = participant
+                        };
+
+                    switch (winner.Place)
+                    {
+                        case 1:
+                            statistics[participant.Id].Gold++;
+                            break;
+                        case 2:
+                            statistics[participant.Id].Silver++;
+                            break;
+                        case 3:
+                            statistics[participant.Id].Bronze++;
+                            break;
+                    }
+
+                    statistics[participant.Id].TotalVotes += winner.Votes;
+                }
+            }
+        }
+
+        return statistics.Values;
+    }
+
     private Regex commandRegex = new Regex(@"^(/\w+?)(\s|$)");
 
     public async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
@@ -162,16 +139,16 @@ public class GameUpdateHandler : IUpdateHandler
         {
             if (update.CallbackQuery is { } inline)
             {
-                await HandleVoteAsync(update.CallbackQuery.Message.Chat.Id, inline.Data.ToLower().Trim(), cancellationToken);
-                await botClient.AnswerCallbackQueryAsync(update.CallbackQuery.Id);
+                var result = HandleVote(update.CallbackQuery.From.Id, inline.Data.ToLower().Trim());
+                await botClient.AnswerCallbackQueryAsync(update.CallbackQuery.Id, text: result);
                 return;
             }
 
             if (update.Message is not { } message)
                 return;
-            if (message.Text is not { } messageText || message.Caption is not { } caption)
+            if (message.Text == null && message.Caption == null)
                 return;
-            messageText = messageText?.Trim() ?? caption.Trim();
+            var messageText = message.Text?.Trim() ?? message.Caption.Trim();
 
             Console.WriteLine($"Received '{message.Text}' from '{message.From.Id}'");
 
@@ -202,7 +179,21 @@ public class GameUpdateHandler : IUpdateHandler
             if (gameManager.Game.State == GameState.Start)
                 await HandleRiddleAsync(chatId, messageText, cancellationToken);
             else if (gameManager.Game.State == GameState.Voting)
-                await HandleVoteAsync(chatId, messageText, cancellationToken);
+            {
+                try
+                {
+                    var result = HandleVote(chatId, messageText);
+                    await botClient.SendTextMessageAsync(
+                        chatId: chatId,
+                        text: result,
+                        parseMode: ParseMode.Html,
+                        cancellationToken: cancellationToken);
+                }
+                catch
+                {
+
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -257,31 +248,16 @@ public class GameUpdateHandler : IUpdateHandler
         }
     }
 
-    private async Task HandleVoteAsync(long chatId, string vote, CancellationToken cancellationToken)
+    private string HandleVote(long chatId, string vote)
     {
-        try
+        var voted = gameManager.Vote(chatId, vote);
+        if (voted)
         {
-            var voted = gameManager.Vote(chatId, vote);
-            if (voted)
-            {
-                await botClient.SendTextMessageAsync(
-                    chatId: chatId,
-                    text: $"Вы проголосовали за <b>{vote}</b>",
-                    parseMode: ParseMode.Html,
-                    cancellationToken: cancellationToken);
-            }
-            else
-            {
-                await botClient.SendTextMessageAsync(
-                    chatId: chatId,
-                    text: "Такой загадки нет!",
-                    parseMode: ParseMode.Html,
-                    cancellationToken: cancellationToken);
-            }
+            return $"Вы проголосовали за <b>{vote}</b>";
         }
-        catch
+        else
         {
-
+            return "Такой загадки нет или вы проголосовали за себя";
         }
     }
 
@@ -314,7 +290,7 @@ public class GameUpdateHandler : IUpdateHandler
         {
             try
             {
-                var (text, markup) = GameRenderer.GetVotingMessage(game, id);
+                var (text, markup) = GameRenderer.RenderVoteStarted(game, id);
                 await botClient.SendTextMessageAsync(id, text, replyMarkup: markup, parseMode: ParseMode.Html);
             }
             catch
@@ -322,13 +298,33 @@ public class GameUpdateHandler : IUpdateHandler
 
             }
         }
+
+        try
+        {
+            await channelSender.SendVoteStartedAsync(game);
+        }
+        catch
+        {
+
+        }
     }
     private async Task HandleGameEndedAsync(Codenames.Game game)
     {
         Console.WriteLine("Game ended");
 
-        var response = gameManager.GetResultString(game);
+        var winners = GameManager.GetWinners(game);
+        var response = winners.Count == 0 ? "Никто не проголосовал..." : GameRenderer.RenderWinners(winners);
+
         await SendAllAsync(response);
+
+        try
+        {
+            await channelSender.SendGameSummaryAsync(game);
+        }
+        catch
+        {
+
+        }
     }
 
     private async Task UpdateMainMessagesAsync(string text)

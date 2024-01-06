@@ -1,20 +1,23 @@
 ﻿using Codenames.Bot;
+using Microsoft.Extensions.DependencyInjection;
 using System.Globalization;
 using System.Text.Json;
-
-var settingsFileName = "settings.json";
-var settingsJson = File.ReadAllText(settingsFileName);
-var settings = JsonSerializer.Deserialize<BotSettings>(settingsJson)!;
+using System.Threading.Channels;
 
 CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("ru");
 
 var hostBuilder = Host.CreateDefaultBuilder(args);
-hostBuilder.ConfigureServices(services =>
+hostBuilder.ConfigureServices((app, services) =>
 {
-    services.AddLogging();
-    services.AddCodenames(settings);
+    services.AddSingleton<BotSettings>(app.Configuration.GetSection("Game").Get<BotSettings>()!);
+    services.AddSingleton<ChannelSenderOptions>(app.Configuration.GetSection("Channel").Get<ChannelSenderOptions>()!);
+
+    if (app.HostingEnvironment.IsProduction())
+        services.AddLogging();
+    services.AddCodenames();
     services.AddHostedService<CodenamesWorker>();
 });
 
 var host = hostBuilder.Build();
+
 await host.RunAsync();

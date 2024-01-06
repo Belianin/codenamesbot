@@ -1,6 +1,7 @@
 ﻿using Codenames.Bot.Commands;
 using Codenames.WordProviders;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,12 +13,20 @@ namespace Codenames.Bot
 {
     public static class ServiceCollectionExtensions
     {
-        public static IServiceCollection AddCodenames(this IServiceCollection services, BotSettings settings)
+        public static IServiceCollection AddCodenames(this IServiceCollection services)
         {
             services.AddSingleton<IUsersRepostiory, SqlUsersRepository>();
             services.AddSingleton<GameFactory>();
             services.AddSingleton<GameUpdateHandler>();
             services.AddSingleton<GameManager>();
+            services.AddSingleton<IChannelSender, ChannelSender>();
+            services.AddSingleton<IGameScheduler>(sp =>
+            {
+                if (sp.GetRequiredService<IHostEnvironment>().IsProduction())
+                    return new Scheduler();
+
+                return new InteractiveScheduler();
+            });
             services.AddSingleton<IWordsProvider>(sp =>
             {
                 return new CacheWordsProvider(
@@ -25,7 +34,7 @@ namespace Codenames.Bot
                     {
                         UpdateInterval = TimeSpan.FromDays(1)
                     },
-                    new CommaSeparetedHttpWordsProvider(new Uri(settings.WordsUri))
+                    new CommaSeparetedHttpWordsProvider(new Uri(sp.GetRequiredService<BotSettings>().WordsUri))
                 );
             });
             services.AddSingleton<GameFactorySettings>(new GameFactorySettings
@@ -43,8 +52,8 @@ namespace Codenames.Bot
                     new SendMessageCommand()
                 };
             });
-            services.AddSingleton<TelegramBotClient>(x => new TelegramBotClient(settings.Token));
-            services.AddDbContext<CodenamesDbContext>(x => x.UseSqlite("Data Source=codenames.db"));
+            services.AddSingleton<TelegramBotClient>(sp => new TelegramBotClient(sp.GetRequiredService<BotSettings>().Token));
+            services.AddDbContext<CodenamesDbContext>(x => x.UseSqlite("Data Source=codenames.db"), contextLifetime: ServiceLifetime.Singleton);
 
             return services;
         }
